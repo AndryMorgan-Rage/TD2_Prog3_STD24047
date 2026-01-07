@@ -1,4 +1,4 @@
-package Football;
+package Football.java;
 
 import java.util.List;
 

@@ -1,12 +1,13 @@
-package Football;
+package Football.java;
 
 public class Player {
     private int id;
     private String name;
+    private int age;
     private positionEnum position;
     private Team team;
 
-    public Player(int id, String name, positionEnum position, Team team) {
+    public Player(int id, String name, int age, positionEnum position, Team team) {
         this.id = id;
         this.name = name;
         this.position = position;
@@ -43,5 +44,9 @@ public class Player {
 
     public void setTeam(Team team) {
         this.team = team;
+    }
+
+    public int getAge() {
+        return age;
     }
 }

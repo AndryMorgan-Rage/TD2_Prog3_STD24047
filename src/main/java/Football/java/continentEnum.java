@@ -1,4 +1,4 @@
-package Football;
+package Football.java;
 
 public enum continentEnum {
     AFRICA,
