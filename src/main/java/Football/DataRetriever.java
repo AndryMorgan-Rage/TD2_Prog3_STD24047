@@ -17,42 +17,45 @@ public class DataRetriever {
     private final DBConnection dbConnection = new DBConnection();
 
     public Team findTeamById(Integer id) throws SQLException {
-        Team team = null;
-        String teamQuery = """
-               SELECT id, name , continent FROM Team WHERE id = ?
-               """;
-        String playerQuery = """
-                SELECT id, name, age, position FROM Player WHERE id_team = ?
-                """;
+        String teamQuery = "SELECT id, name, continent FROM Team WHERE id = ?";
+        String playerQuery = "SELECT id, name, age, position, goal_nb FROM Player WHERE id_team = ?";
+
         try (Connection connection = dbConnection.getDBConnection();
              PreparedStatement teamStmt = connection.prepareStatement(teamQuery)) {
+
             teamStmt.setInt(1, id);
-            ResultSet teamRs = teamStmt.executeQuery();
-            if (teamRs.next()) {
-                team = new Team(
+            try (ResultSet teamRs = teamStmt.executeQuery()) {
+                if (!teamRs.next()) {
+                    return null;
+                }
+
+                Team team = new Team(
                         teamRs.getInt("id"),
                         teamRs.getString("name"),
                         continentEnum.valueOf(teamRs.getString("continent"))
                 );
+                team.setPlayers(new ArrayList<>());
+
                 try (PreparedStatement playerStmt = connection.prepareStatement(playerQuery)) {
                     playerStmt.setInt(1, id);
-                    ResultSet playerRs = playerStmt.executeQuery();
-
-                    while (playerRs.next()) {
-                        Player player = new Player(
-                                playerRs.getInt("id"),
-                                playerRs.getString("name"),
-                                playerRs.getInt("age"),
-                                positionEnum.valueOf(playerRs.getString("position")),
-                                team
-                        );
-                        team.getPlayers().add(player);
+                    try (ResultSet playerRs = playerStmt.executeQuery()) {
+                        while (playerRs.next()) {
+                            Player player = new Player(
+                                    playerRs.getInt("id"),
+                                    playerRs.getString("name"),
+                                    playerRs.getInt("age"),
+                                    positionEnum.valueOf(playerRs.getString("position")),
+                                    team
+                            );
+                            // Safe retrieval of nullable Integer
+                            player.setGoalNb((Integer) playerRs.getObject("goal_nb"));
+                            team.getPlayers().add(player);
+                        }
                     }
                 }
+                return team;
             }
         }
-
-        return team;
     }
 
 
@@ -64,18 +67,19 @@ public class DataRetriever {
         }
 
         String query = """
-            SELECT p.id, p.name, p.age, p.position, t.id AS team_id, t.name AS team_name, t.continent FROM Player p LEFT JOIN Team t ON p.id_team = t.id ORDER BY p.id LIMIT ? OFFSET ?
+        SELECT p.id, p.name, p.age, p.position, p.goal_nb,
+       t.id AS team_id, t.name AS team_name, t.continent
             """;
 
         int offset = (page - 1) * size;
 
         try (Connection connection = dbConnection.getDBConnection();
-             PreparedStatement stmt = connection.prepareStatement(query)) {
+             PreparedStatement state = connection.prepareStatement(query)) {
 
-            stmt.setInt(1, size);
-            stmt.setInt(2, offset);
+            state.setInt(1, size);
+            state.setInt(2, offset);
 
-            ResultSet rs = stmt.executeQuery();
+            ResultSet rs = state.executeQuery();
 
             while (rs.next()) {
 
@@ -114,8 +118,8 @@ public class DataRetriever {
             connection.setAutoCommit(false);
 
             String insertQuery = """
-                INSERT INTO Player(id ,name, age, position, id_team)
-                VALUES (?,?, ?, ?, ?)
+            INSERT INTO Player(id, name, age, position, goal_nb, id_team)
+            VALUES (?, ?, ?, ?, ?, ?)
                 """;
 
             for (Player p : newPlayers) {
@@ -125,18 +129,23 @@ public class DataRetriever {
                 }
             }
 
-            try (PreparedStatement stmt = connection.prepareStatement(insertQuery)) {
+            try (PreparedStatement state = connection.prepareStatement(insertQuery)) {
                 for (Player p : newPlayers) {
-                    stmt.setInt(1, p.getId());
-                    stmt.setString(2, p.getName());
-                    stmt.setInt(3, p.getAge());
-                    stmt.setObject(4, p.getPosition().name(), java.sql.Types.OTHER);
+                    state.setInt(1, p.getId());
+                    state.setString(2, p.getName());
+                    state.setInt(3, p.getAge());
+                    state.setObject(5, p.getGoalNb(), java.sql.Types.INTEGER);
                     if (p.getTeam() != null) {
-                        stmt.setInt(5, p.getTeam().getId());
+                        state.setInt(5, p.getTeam().getId());
                     } else {
-                        stmt.setNull(5, java.sql.Types.INTEGER);
+                        state.setNull(5, java.sql.Types.INTEGER);
                     }
-                    stmt.executeUpdate();
+                    if (p.getGoalNb() != null) {
+                        state.setInt(5, p.getGoalNb()); // valeur connue
+                    } else {
+                        state.setNull(5, java.sql.Types.INTEGER); // NULL en SQL
+                    }
+                    state.executeUpdate();
                 }
             }
 
@@ -150,9 +159,9 @@ public class DataRetriever {
 
     private boolean playerExists(Connection connection, String name) throws SQLException {
         String query = "SELECT COUNT(*) FROM Player WHERE name = ?";
-        try (PreparedStatement stmt = connection.prepareStatement(query)) {
-            stmt.setString(1, name);
-            ResultSet rs = stmt.executeQuery();
+        try (PreparedStatement state = connection.prepareStatement(query)) {
+            state.setString(1, name);
+            ResultSet rs = state.executeQuery();
             return rs.next() && rs.getInt(1) > 0;
         }
     }
@@ -175,39 +184,39 @@ public class DataRetriever {
 
             boolean exists;
 
-            try (PreparedStatement stmt = connection.prepareStatement(existsQuery)) {
-                stmt.setInt(1, teamToSave.getId());
-                ResultSet rs = stmt.executeQuery();
+            try (PreparedStatement state = connection.prepareStatement(existsQuery)) {
+                state.setInt(1, teamToSave.getId());
+                ResultSet rs = state.executeQuery();
                 exists = rs.next() && rs.getInt(1) > 0;
             }
 
             if (!exists) {
-                try (PreparedStatement stmt = connection.prepareStatement(insertQuery)) {
-                    stmt.setInt(1, teamToSave.getId());
-                    stmt.setString(2, teamToSave.getName());
-                    stmt.setString(3, teamToSave.getContinent().name());
-                    stmt.executeUpdate();
+                try (PreparedStatement state = connection.prepareStatement(insertQuery)) {
+                    state.setInt(1, teamToSave.getId());
+                    state.setString(2, teamToSave.getName());
+                    state.setString(3, teamToSave.getContinent().name());
+                    state.executeUpdate();
                 }
             } else {
-                try (PreparedStatement stmt = connection.prepareStatement(updateQuery)) {
-                    stmt.setString(1, teamToSave.getName());
-                    stmt.setString(2, teamToSave.getContinent().name());
-                    stmt.setInt(3, teamToSave.getId());
-                    stmt.executeUpdate();
+                try (PreparedStatement state = connection.prepareStatement(updateQuery)) {
+                    state.setString(1, teamToSave.getName());
+                    state.setString(2, teamToSave.getContinent().name());
+                    state.setInt(3, teamToSave.getId());
+                    state.executeUpdate();
                 }
             }
 
-            try (PreparedStatement stmt = connection.prepareStatement(removePlayersTeam)) {
-                stmt.setInt(1, teamToSave.getId());
-                stmt.executeUpdate();
+            try (PreparedStatement state = connection.prepareStatement(removePlayersTeam)) {
+                state.setInt(1, teamToSave.getId());
+                state.executeUpdate();
             }
 
             if (teamToSave.getPlayers() != null) {
-                try (PreparedStatement stmt = connection.prepareStatement(updatePlayerTeam)) {
+                try (PreparedStatement state = connection.prepareStatement(updatePlayerTeam)) {
                     for (Player p : teamToSave.getPlayers()) {
-                        stmt.setInt(1, teamToSave.getId());
-                        stmt.setInt(2, p.getId());
-                        stmt.executeUpdate();
+                        state.setInt(1, teamToSave.getId());
+                        state.setInt(2, p.getId());
+                        state.executeUpdate();
                     }
                 }
             }
@@ -225,18 +234,14 @@ public class DataRetriever {
         List<Team> teams = new ArrayList<>();
 
         String query = """
-        SELECT t.id AS team_id, t.name AS team_name, t.continent AS team_continent
-        FROM Team t
-        JOIN Player p ON p.id_team = t.id
-        WHERE LOWER(p.name) LIKE LOWER(?)
-        GROUP BY t.id, t.name, t.continent
+ SELECT t.id AS team_id, t.name AS team_name, t.continent AS team_continent FROM Team t JOIN Player p ON p.id_team = t.id WHERE LOWER(p.name) LIKE LOWER(?) GROUP BY t.id, t.name, t.continent
         """;
 
         try (Connection connection = dbConnection.getDBConnection();
-             PreparedStatement stmt = connection.prepareStatement(query)) {
+             PreparedStatement state = connection.prepareStatement(query)) {
 
-            stmt.setString(1, "%" + playerName + "%");
-            ResultSet rs = stmt.executeQuery();
+            state.setString(1, "%" + playerName + "%");
+            ResultSet rs = state.executeQuery();
 
             while (rs.next()) {
                 Team team = new Team(
@@ -292,13 +297,13 @@ public class DataRetriever {
         params.add((page - 1) * size);
 
         try (Connection connection = dbConnection.getDBConnection();
-             PreparedStatement stmt = connection.prepareStatement(baseQuery)) {
+             PreparedStatement state = connection.prepareStatement(baseQuery)) {
 
             for (int i = 0; i < params.size(); i++) {
-                stmt.setObject(i + 1, params.get(i));
+                state.setObject(i + 1, params.get(i));
             }
 
-            ResultSet rs = stmt.executeQuery();
+            ResultSet rs = state.executeQuery();
             while (rs.next()) {
                 Team team = new Team(
                         rs.getInt("team_id"),
